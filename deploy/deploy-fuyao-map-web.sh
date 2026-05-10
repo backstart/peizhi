@@ -8,6 +8,67 @@ TILES_SHARED_DIR="/www/docker/fuyaomap/tiles"
 MAP_RESOURCES_SHARED_DIR="/www/docker/fuyaomap/map-resources"
 RUNTIME_DIR="/www/docker/fuyaomapweb/runtime"
 
+retry() {
+  local max_attempts="${RETRY_MAX_ATTEMPTS:-3}"
+  local delay_seconds="${RETRY_DELAY_SECONDS:-5}"
+  local attempt=1
+  while true; do
+    if "$@"; then
+      return 0
+    fi
+    local exit_code=$?
+    if [ "${attempt}" -ge "${max_attempts}" ]; then
+      echo "命令执行失败，已达到最大重试次数: $*"
+      return "${exit_code}"
+    fi
+    echo "命令执行失败，${delay_seconds}s 后重试 (${attempt}/${max_attempts}): $*"
+    sleep "${delay_seconds}"
+    attempt=$((attempt + 1))
+  done
+}
+
+docker_login() {
+  echo "${DOCKER_PASSWORD}" | docker login -u "${DOCKER_USERNAME}" --password-stdin "${ACR}"
+}
+
+wait_for_http() {
+  local url="$1"
+  local max_checks="${2:-20}"
+  local delay_seconds="${3:-3}"
+
+  for i in $(seq 1 "${max_checks}"); do
+    if curl -fsS "${url}" >/dev/null 2>&1; then
+      echo "健康检查通过: ${url}"
+      return 0
+    fi
+    echo "等待服务启动 (${i}/${max_checks}): ${url}"
+    sleep "${delay_seconds}"
+  done
+
+  return 1
+}
+
+bootstrap_map_resources_if_needed() {
+  if [ -f "${MAP_RESOURCES_SHARED_DIR}/styles/amap-like.json" ] && [ -f "${MAP_RESOURCES_SHARED_DIR}/manifest.json" ]; then
+    echo "共享 map-resources 已存在，跳过初始化"
+    return 0
+  fi
+
+  echo "共享 map-resources 不存在，尝试从镜像初始化"
+  local tmp_container="fuyao-map-web-bootstrap-$$"
+
+  docker rm -f "${tmp_container}" >/dev/null 2>&1 || true
+  docker create --name "${tmp_container}" "${IMG}" >/dev/null
+  mkdir -p "${MAP_RESOURCES_SHARED_DIR}"
+  docker cp "${tmp_container}:/usr/share/nginx/html/map-resources/." "${MAP_RESOURCES_SHARED_DIR}/"
+  docker rm -f "${tmp_container}" >/dev/null 2>&1 || true
+
+  if [ ! -f "${MAP_RESOURCES_SHARED_DIR}/styles/amap-like.json" ] || [ ! -f "${MAP_RESOURCES_SHARED_DIR}/manifest.json" ]; then
+    echo "map-resources 初始化失败"
+    exit 1
+  fi
+}
+
 echo "==> 部署地图 Web"
 echo "镜像: ${IMG}"
 
@@ -25,20 +86,11 @@ if [ ! -f "${TILES_SHARED_DIR}/city.pmtiles" ]; then
   exit 1
 fi
 
-if [ ! -f "${MAP_RESOURCES_SHARED_DIR}/styles/amap-like.json" ]; then
-  echo "缺少默认样式文件: ${MAP_RESOURCES_SHARED_DIR}/styles/amap-like.json"
-  echo "请先把 map-resources 初始化到宿主机共享目录，否则挂载后页面会空白。"
-  exit 1
-fi
+retry docker_login
+retry docker pull "${IMG}"
 
-if [ ! -f "${MAP_RESOURCES_SHARED_DIR}/manifest.json" ]; then
-  echo "缺少 manifest 文件: ${MAP_RESOURCES_SHARED_DIR}/manifest.json"
-  exit 1
-fi
+bootstrap_map_resources_if_needed
 
-echo "${DOCKER_PASSWORD}" | docker login -u "${DOCKER_USERNAME}" --password-stdin "${ACR}"
-
-docker pull "${IMG}"
 docker rm -f fuyao-map-web >/dev/null 2>&1 || true
 
 docker run -d \
@@ -50,19 +102,17 @@ docker run -d \
   -v "${RUNTIME_DIR}:/usr/share/nginx/html/runtime" \
   "${IMG}"
 
-sleep 6
-
-curl -fsS http://127.0.0.1:8002 >/dev/null \
-  && echo "✅ Web 健康检查通过" \
-  || {
-    echo "❌ Web 健康检查失败，最近日志："
-    docker logs fuyao-map-web --tail 120
-    exit 1
-  }
+if wait_for_http "http://127.0.0.1:8002" 30 3; then
+  echo "✅ Web 健康检查通过"
+else
+  echo "❌ Web 健康检查失败，最近日志："
+  docker logs fuyao-map-web --tail 150
+  exit 1
+fi
 
 echo "==> Web 静态资源检查"
 curl -I http://127.0.0.1:8002/tiles/city.pmtiles || true
 curl -I http://127.0.0.1:8002/map-resources/styles/amap-like.json || true
 curl -I http://127.0.0.1:8002/map-resources/manifest.json || true
 
-docker image prune -f --filter "until=24h"
+docker image prune -f --filter "until=24h" || true

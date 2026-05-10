@@ -8,6 +8,46 @@ TILES_SHARED_DIR="/www/docker/fuyaomap/tiles"
 MAP_RESOURCES_SHARED_DIR="/www/docker/fuyaomap/map-resources"
 IMPORTS_DIR="/data/fuyaomap/imports"
 
+retry() {
+  local max_attempts="${RETRY_MAX_ATTEMPTS:-3}"
+  local delay_seconds="${RETRY_DELAY_SECONDS:-5}"
+  local attempt=1
+  while true; do
+    if "$@"; then
+      return 0
+    fi
+    local exit_code=$?
+    if [ "${attempt}" -ge "${max_attempts}" ]; then
+      echo "命令执行失败，已达到最大重试次数: $*"
+      return "${exit_code}"
+    fi
+    echo "命令执行失败，${delay_seconds}s 后重试 (${attempt}/${max_attempts}): $*"
+    sleep "${delay_seconds}"
+    attempt=$((attempt + 1))
+  done
+}
+
+docker_login() {
+  echo "${DOCKER_PASSWORD}" | docker login -u "${DOCKER_USERNAME}" --password-stdin "${ACR}"
+}
+
+wait_for_http() {
+  local url="$1"
+  local max_checks="${2:-20}"
+  local delay_seconds="${3:-3}"
+
+  for i in $(seq 1 "${max_checks}"); do
+    if curl -fsS "${url}" >/dev/null 2>&1; then
+      echo "健康检查通过: ${url}"
+      return 0
+    fi
+    echo "等待服务启动 (${i}/${max_checks}): ${url}"
+    sleep "${delay_seconds}"
+  done
+
+  return 1
+}
+
 echo "==> 部署地图 API"
 echo "镜像: ${IMG}"
 
@@ -32,13 +72,13 @@ fi
 
 if [ ! -f "${MAP_RESOURCES_SHARED_DIR}/styles/amap-like.json" ]; then
   echo "缺少默认样式文件: ${MAP_RESOURCES_SHARED_DIR}/styles/amap-like.json"
-  echo "请先把 map-resources 初始化到宿主机共享目录。"
+  echo "请先成功部署 Web，确保 map-resources 已初始化到共享目录。"
   exit 1
 fi
 
-echo "${DOCKER_PASSWORD}" | docker login -u "${DOCKER_USERNAME}" --password-stdin "${ACR}"
+retry docker_login
+retry docker pull "${IMG}"
 
-docker pull "${IMG}"
 docker rm -f fuyao-map-api >/dev/null 2>&1 || true
 
 docker run -d \
@@ -55,17 +95,15 @@ docker run -d \
   -v "${MAP_RESOURCES_SHARED_DIR}:/shared/map-resources" \
   "${IMG}"
 
-sleep 6
+if wait_for_http "http://127.0.0.1:7165/health" 30 3; then
+  echo "✅ API 健康检查通过"
+else
+  echo "❌ API 健康检查失败，最近日志："
+  docker logs fuyao-map-api --tail 150
+  exit 1
+fi
 
-curl -fsS http://127.0.0.1:7165/health >/dev/null \
-  && echo "✅ API 健康检查通过" \
-  || {
-    echo "❌ API 健康检查失败，最近日志："
-    docker logs fuyao-map-api --tail 120
-    exit 1
-  }
-
-echo "==> API 容器环境变量检查"
+echo "==> API 环境变量检查"
 docker exec fuyao-map-api sh -lc 'printenv | grep FUYAO_MAP || true'
 
-docker image prune -f --filter "until=24h"
+docker image prune -f --filter "until=24h" || true
