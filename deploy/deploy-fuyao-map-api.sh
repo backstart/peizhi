@@ -72,7 +72,7 @@ docker run -d \
   -e Logging__LogLevel__Default=Trace \
   -e Logging__LogLevel__Microsoft=Debug \
   -e Logging__LogLevel__Microsoft_AspNetCore=Debug \
-  -e ConnectionStrings__Postgres="Host=10.1.4.12;Port=5432;Database=mapdb;Username=ckstart;Password=asdtyui123" \
+  -e ConnectionStrings__Postgres="Host=159.75.54.99;Port=5432;Database=mapdb;Username=ckstart;Password=asdtyui123" \
   -e FUYAO_MAP_RUNTIME_PROBE_BASE_URLS="http://fuyao-map-web:8002;http://159.75.54.99:8002" \
   -e FUYAO_MAP_SHARED_TILES_ROOT="/shared/tiles" \
   -e FUYAO_MAP_SHARED_MAP_RESOURCES_ROOT="/shared/map-resources" \
