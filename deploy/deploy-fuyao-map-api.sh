@@ -68,6 +68,10 @@ docker run -d \
   --restart unless-stopped \
   -p 7165:7165 \
   -e ASPNETCORE_ENVIRONMENT=Production \
+  -e FUYAO_MAP_FORCE_DETAILED_ERRORS=true \
+  -e Logging__LogLevel__Default=Trace \
+  -e Logging__LogLevel__Microsoft=Debug \
+  -e Logging__LogLevel__Microsoft_AspNetCore=Debug \
   -e ConnectionStrings__Postgres="Host=127.0.0.1;Port=5432;Database=mapdb;Username=ckstart;Password=asdtyui123" \
   -e FUYAO_MAP_RUNTIME_PROBE_BASE_URLS="http://fuyao-map-web:8002;http://159.75.54.99:8002" \
   -e FUYAO_MAP_SHARED_TILES_ROOT="/shared/tiles" \
@@ -85,5 +89,5 @@ else
   exit 1
 fi
 
-docker exec fuyao-map-api sh -lc 'printenv | grep FUYAO_MAP || true'
+docker exec fuyao-map-api sh -lc 'printenv | grep -E "FUYAO_MAP|Logging__LogLevel" || true'
 docker image prune -f --filter "until=24h" || true

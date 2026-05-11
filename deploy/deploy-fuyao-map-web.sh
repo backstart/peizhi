@@ -104,5 +104,6 @@ fi
 curl -I http://127.0.0.1:8002/tiles/city.pmtiles || true
 curl -I http://127.0.0.1:8002/map-resources/styles/amap-like.json || true
 curl -I http://127.0.0.1:8002/map-resources/manifest.json || true
+echo "提示：API 详细异常输出开关在 deploy-fuyao-map-api.sh 中配置（FUYAO_MAP_FORCE_DETAILED_ERRORS）"
 
 docker image prune -f --filter "until=24h" || true
